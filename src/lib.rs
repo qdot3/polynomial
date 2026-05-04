@@ -1,3 +1,5 @@
+use std::ops::{Add, Mul, Neg, Sub};
+
 /// Compile-time specified 31-bit modulus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Modulus<const M: u32>;
@@ -5,6 +7,7 @@ pub struct Modulus<const M: u32>;
 impl<const M: u32> Modulus<M> {
     /// 31-bit modulus used for modular arithmetic
     const MODULUS: i64 = M as i64;
+
     /// Magic number for Plantard multiplication
     const MAGIC_D: i64 = {
         let m = M as u64;
@@ -21,6 +24,7 @@ impl<const M: u32> Modulus<M> {
 
         inv_m as i64
     };
+
     /// Magic number for Plantard multiplication
     const MAGIC_A: i64 = {
         let lz = M.leading_zeros();
@@ -35,7 +39,10 @@ impl<const M: u32> Modulus<M> {
     ///
     /// # Constraints
     ///
-    /// TODO
+    /// Let `A` to be `1 << (M.leading_zeros() - 1)`
+    ///
+    /// - `a * b >= -(2^A - 1) * M * 2^32`.
+    /// - `a * b` must not overflow.
     #[inline(always)]
     pub const fn imul(a: i64, b: i64) -> i64 {
         let c = a.wrapping_mul(b).wrapping_mul(Self::MAGIC_D);
@@ -46,7 +53,10 @@ impl<const M: u32> Modulus<M> {
     ///
     /// # Constraints
     ///
-    /// `a * a` must not overflow.
+    /// Let `A` to be `1 << (M.leading_zeros() - 1)`.
+    ///
+    /// - `a >= -(2^A - 1) * 2^32`.
+    /// - `a^2` must not overflow.
     pub const fn pow(mut a: i64, mut exp: u32) -> i64 {
         let mut res = const { Self::i2p(1) };
 
@@ -67,8 +77,10 @@ impl<const M: u32> Modulus<M> {
     ///
     /// # Preconditions
     ///
-    /// - `i >= -((2^A - 1) * M * 2^32)`, where `A = 1 << (M.leading_zeros() - 1)`.
-    /// - `i < (2^64 - M * 2^(32 + A)) / (M - 1)`.
+    /// Let `A` to be `1 << (M.leading_zeros() - 1)`.
+    ///
+    /// - `i >= -(2^A - 1) * 2^32`.
+    /// - `i * M` must not overflow.
     /// - Any value representable in `i32` satisfies these conditions.
     pub const fn i2p(i: i64) -> i64 {
         //`(2^128 % M) * MAGIC_D`
@@ -87,14 +99,29 @@ impl<const M: u32> Modulus<M> {
     ///
     /// # Preconditions
     ///
-    /// - `p >= -(2^A - 1) * M * 2^32`, where `A = 1 << (M.leading_zeros() - 1)`.
-    /// - Any value representable in `i32` satisfies this condition.
+    /// Let `A` to be `1 << (M.leading_zeros() - 1)`.
+    ///
+    /// - `p >= -(2^A - 1) * M * 2^32`.
+    /// - Any value representable in `i32` satisfies these conditions.
     pub const fn p2i(p: i64) -> i64 {
         let c = p.wrapping_mul(/* 1 times */ Self::MAGIC_D);
         ((c >> 32) + Self::MAGIC_A).wrapping_mul(Self::MODULUS) >> 32
     }
 
+    pub const fn p2i2p(p: i64) -> i64 {
+        let i = Self::p2i(p);
+        Self::i2p(i)
+    }
+
     /// Performs `p % self` in Plantard form.
+    ///
+    /// # Precondition
+    ///
+    /// Let `A` to be `1 << (M.leading_zeros() - 1)`.
+    ///
+    /// - `i >= -(2^A - 1) * 2^32`.
+    /// - `i * M` must not overflow.
+    /// - Any value representable in `i32` satisfies these conditions.
     pub const fn reduce(p: i64) -> i64 {
         // \bar{1}
         let one = const { Self::i2p(1).wrapping_mul(Self::MAGIC_D) };
@@ -137,10 +164,11 @@ mod test_modulus {
 }
 
 pub trait NTTFriendlyPrime {
+    /// A primitive root
     const PRIMITIVE_ROOT: i64;
-
-    /// P = A 2^L + 1 (A: odd)
+    /// `P = A 2^L + 1 (A: odd)`
     const A: u32;
+    /// `P = A 2^L + 1 (A: odd)`
     const L: u32;
 }
 
@@ -156,6 +184,7 @@ where
     Modulus<M>: NTTFriendlyPrime,
 {
     seq: Vec<i64>,
+    scaling_factor: u32,
 }
 
 /// Low-level apis for multiplication of polynomials (convolution).
@@ -190,6 +219,10 @@ where
             seq.len() >> Modulus::<M>::L <= 1,
             "Modulus `M` does not support NTT for this sequence length (too large)."
         );
+        debug_assert!(
+            seq.iter().all(|v| v.unsigned_abs() < M as u64),
+            "`seq` must be reduced."
+        );
 
         let lut: [i64; 32] = const {
             let mut lut = [0; _];
@@ -220,10 +253,11 @@ where
         };
 
         let mut w = seq.len() >> 1;
-        let mut step = 0_u64;
-        let interval = const {
-            let lb = (1 - Modulus::<M>::MAGIC_A) /* times M */ << 32;
-            lb.unsigned_abs() / M as u64
+        let mut sc = 0;
+        let max_sc = const {
+            let max = Modulus::<M>::MAGIC_A << 32;
+            let sc = max.div_euclid(M as i64);
+            (sc as u64).trailing_zeros()
         };
         while w > 0 {
             // r = \bar{1}
@@ -253,13 +287,14 @@ where
 
             w >>= 1;
 
-            step += 1;
-            if step.is_multiple_of(interval) {
+            sc += 1;
+            if sc == max_sc {
+                sc = 1;
                 seq.iter_mut().for_each(|v| *v = Modulus::<M>::reduce(*v));
             }
         }
 
-        !step.is_multiple_of(interval)
+        sc == 1
     }
 
     /// Performs an in-place inverse Cooley–Tukey butterfly without normalization.
@@ -288,6 +323,10 @@ where
         assert!(
             seq.len() >> Modulus::<M>::L <= 1,
             "Modulus `M` does not support NTT for this sequence length (too large)."
+        );
+        debug_assert!(
+            seq.iter().all(|v| v.unsigned_abs() < M as u64),
+            "`seq` must be reduced."
         );
 
         let lut: [i64; 32] = const {
@@ -319,10 +358,11 @@ where
         };
 
         let mut w = 1;
-        let mut step = 0_u64;
-        let interval = const {
-            let lb = (1 - Modulus::<M>::MAGIC_A) /* times M */ << 32;
-            lb.unsigned_abs() / M as u64
+        let mut sc = 0;
+        let max_sc = const {
+            let max = Modulus::<M>::MAGIC_A << 32;
+            let sc = max.div_euclid(M as i64);
+            (sc as u64).trailing_zeros()
         };
         while w < seq.len() {
             // r = \bar{1}
@@ -352,13 +392,14 @@ where
 
             w <<= 1;
 
-            step += 1;
-            if step.is_multiple_of(interval) {
+            sc += 1;
+            if sc == max_sc {
+                sc = 1;
                 seq.iter_mut().for_each(|v| *v = Modulus::<M>::reduce(*v));
             }
         }
 
-        !step.is_multiple_of(interval)
+        sc == 1
     }
 
     /// Performs an in-place convolution using Cooley–Tukey butterflies,
@@ -385,6 +426,14 @@ where
             lhs.len().is_power_of_two(),
             "length of operands must be a power of two"
         );
+        debug_assert!(
+            lhs.iter().all(|v| v.unsigned_abs() < M as u64),
+            "`lhs` must be reduced."
+        );
+        debug_assert!(
+            rhs.iter().all(|v| v.unsigned_abs() < M as u64),
+            "`rhs` must be reduced."
+        );
 
         let frac_1_n = {
             // `1 / 2^i (mod M)`
@@ -407,10 +456,11 @@ where
         };
 
         Self::butterfly(lhs);
-        Self::butterfly(rhs);
+        if !Self::butterfly(rhs) {
+            rhs.iter_mut().for_each(|r| *r = Modulus::<M>::reduce(*r));
+        }
         lhs.iter_mut().zip(rhs.iter_mut()).for_each(|(l, r)| {
-            // Since `rhs` is reduced, precondition of `imul` is never violated
-            *r = Modulus::<M>::reduce(*r);
+            // Since `rhs` is reduced, precondition of `imul` always holds
             *l = Modulus::<M>::imul(*l, *r);
         });
         Self::butterfly_inv(lhs);
@@ -425,7 +475,7 @@ fn butterfly() {
     for n in (0..23).map(|d| 1 << d) {
         const MOD: u32 = 998_244_353;
 
-        let mut seq = Vec::from_iter(0..n as i64);
+        let mut seq = Vec::from_iter((0..n as i64).map(|v| v % MOD as i64));
         seq.extend_from_slice(&vec![0; n]);
         let test: Vec<_> = seq
             .iter()
@@ -433,7 +483,9 @@ fn butterfly() {
             .collect();
 
         type P = Polynomial<MOD>;
-        P::butterfly(&mut seq);
+        if !P::butterfly(&mut seq) {
+            seq.iter_mut().for_each(|v| *v = Modulus::<MOD>::reduce(*v));
+        }
         P::butterfly_inv(&mut seq);
         seq.iter_mut().for_each(|v| *v = v.rem_euclid(MOD as i64));
 
@@ -457,7 +509,14 @@ where
         todo!()
     }
 
-    pub fn get(&mut self, i: usize) -> Option<i32> {
+    /// Gets `i`-th coefficient.
+    ///
+    /// Consider to use [`eval`], [`sum`] and [`prod`] if possible for performance.
+    ///
+    /// [`eval`]: Self::eval
+    /// [`sum`]: Self::sum
+    /// [`prod`]: Self::prod
+    pub fn get(self, i: usize) -> Option<i32> {
         match self.seq.get(i) {
             Some(v) => Some(Modulus::<M>::p2i(*v) as i32),
             None => None,
@@ -479,13 +538,13 @@ where
             .seq
             .iter()
             .rev()
-            // assume `v.abs() < 2^31`
+            // |v| < (MAGIC_A - 1) * M => |result| < INTERVAL * M
             .fold(0, |acc, v| Modulus::<M>::imul(acc, x) + v);
         Modulus::<M>::p2i(result) as i32
     }
 
     pub fn sum(&self) -> i32 {
-        // `seq.len() < M => sum.abs() < M 2^32`
+        // seq.len() < M => |sum| < INTERVAL * M^2
         let sum: i64 = self.seq.iter().sum();
         Modulus::<M>::p2i(sum) as i32
     }
@@ -494,7 +553,68 @@ where
         let prod = self
             .seq
             .iter()
-            .fold(1, |acc, v| Modulus::<M>::imul(acc, *v));
-        todo!()
+            .fold(const { Modulus::<M>::i2p(1) }, |acc, v| {
+                // |v| < INTERVAL * M
+                Modulus::<M>::imul(acc, *v)
+            });
+        Modulus::<M>::p2i(prod) as i32
+    }
+}
+
+impl<const M: u32> Add for Polynomial<M>
+where
+    Modulus<M>: NTTFriendlyPrime,
+{
+    type Output = Self;
+
+    fn add(mut self, mut rhs: Self) -> Self::Output {
+        // save allocation cost
+        if self.seq.len() < rhs.seq.len() {
+            std::mem::swap(&mut self, &mut rhs);
+        }
+
+        // reduce if necessary
+        if let Some(sum) = self.scaling_factor.checked_add(rhs.scaling_factor) {
+            self.scaling_factor = sum;
+            Iterator::zip(self.seq.iter_mut(), rhs.seq).for_each(|(l, r)| *l += r);
+        } else if Modulus::<M>::L >= 2 {
+            // add then reduce
+            Iterator::zip(self.seq.iter_mut(), rhs.seq)
+                .for_each(|(l, r)| *l = Modulus::<M>::p2i2p(*l + r));
+            self.scaling_factor = 1;
+        } else {
+            // reduce
+            let larger = std::cmp::max_by_key(&mut self, &mut rhs, |poly| poly.scaling_factor);
+            Iterator::for_each(larger.seq.iter_mut(), |v| *v = Modulus::<M>::p2i2p(*v));
+            larger.scaling_factor = 1;
+            // then add
+            Iterator::zip(self.seq.iter_mut(), rhs.seq).for_each(|(l, r)| *l += r);
+            self.scaling_factor += rhs.scaling_factor;
+        }
+
+        self
+    }
+}
+
+impl<const M: u32> Sub for Polynomial<M>
+where
+    Modulus<M>: NTTFriendlyPrime,
+{
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        self + -rhs
+    }
+}
+
+impl<const M: u32> Neg for Polynomial<M>
+where
+    Modulus<M>: NTTFriendlyPrime,
+{
+    type Output = Self;
+
+    fn neg(mut self) -> Self::Output {
+        self.seq.iter_mut().for_each(|v| *v = -*v);
+        self
     }
 }
