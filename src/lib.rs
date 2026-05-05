@@ -60,7 +60,6 @@ impl<const M: u32> Modulus<M> {
         ((c >> 32) + Self::MAGIC_A).wrapping_mul(Self::MODULUS) >> 32
     }
 
-
     /// Performs `a.pow(exp)`.
     ///
     /// # Constraints

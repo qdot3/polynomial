@@ -199,10 +199,8 @@ where
     /// Performs an in-place convolution using Cooley–Tukey butterflies,
     /// storing the result in `lhs`.
     ///
-    /// This function applies [`butterfly`] to `rhs` and then [`reduce`]s it,
-    /// leaving it modified.
-    ///
-    /// [`reduce`]: Modulus::reduce
+    /// The result in `lhs` is normalized and reduced.
+    /// This function applies [`butterfly`] to `rhs`, leaving it modified.
     ///
     /// # Preconditions
     ///
@@ -213,7 +211,7 @@ where
     ///
     /// # Time complexity
     ///
-    /// Θ(N log N), where N = `seq.len()`.
+    /// Θ(N log N), where N = `lhs.len()`.
     pub fn wrapping_mul_assign(lhs: &mut [i64], rhs: &mut [i64]) {
         assert_eq!(lhs.len(), rhs.len(), "lengths of operands must match");
         assert!(
@@ -250,11 +248,10 @@ where
         };
 
         Self::butterfly(lhs);
-        if !Self::butterfly(rhs) {
-            rhs.iter_mut().for_each(|r| *r = Modulus::<M>::reduce(*r));
-        }
+        Self::butterfly(rhs);
         lhs.iter_mut().zip(rhs.iter_mut()).for_each(|(l, r)| {
-            // Since `rhs` is reduced, precondition of `imul` always holds
+            // Since scaling factors of `lhs` and `rhs` are the same,
+            // at least one multiplication is available without reduction.
             *l = Modulus::<M>::imul(*l, *r);
         });
         Self::butterfly_inv(lhs);
@@ -278,7 +275,7 @@ fn butterfly() {
 
         type P = Polynomial<MOD>;
         if !P::butterfly(&mut seq) {
-            seq.iter_mut().for_each(|v| *v = Modulus::<MOD>::reduce(*v));
+            // seq.iter_mut().for_each(|v| *v = Modulus::<MOD>::reduce(*v));
         }
         P::butterfly_inv(&mut seq);
         seq.iter_mut().for_each(|v| *v = v.rem_euclid(MOD as i64));
