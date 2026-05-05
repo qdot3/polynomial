@@ -35,6 +35,15 @@ impl<const M: u32> Modulus<M> {
             .expect("Modulus `M` should be at most 31-bit integer.")
     };
 
+    /// Product of operands of `imul` must be greater than or equal to this.
+    pub const MIM_PRODUCT: i64 = {
+        (1 - Self::MAGIC_A)
+            .checked_mul(M as i64)
+            .unwrap()
+            .checked_shl(32)
+            .unwrap()
+    };
+
     /// Performs signed Plantard multiplication.
     ///
     /// # Constraints
@@ -184,7 +193,10 @@ where
     Modulus<M>: NTTFriendlyPrime,
 {
     seq: Vec<i64>,
+    /// seq[i].abs() < SC * M for all i
     scaling_factor: u32,
+    /// Upper bound of degree.
+    degree: usize,
 }
 
 /// Low-level apis for multiplication of polynomials (convolution).
@@ -255,9 +267,11 @@ where
         let mut w = seq.len() >> 1;
         let mut sc = 0;
         let max_sc = const {
-            let max = Modulus::<M>::MAGIC_A << 32;
-            let sc = max.div_euclid(M as i64);
-            (sc as u64).trailing_zeros()
+            Modulus::<M>::MIM_PRODUCT
+                .unsigned_abs()
+                .div_euclid(M as u64 * M as u64)
+                .checked_ilog2()
+                .unwrap()
         };
         while w > 0 {
             // r = \bar{1}
@@ -360,9 +374,11 @@ where
         let mut w = 1;
         let mut sc = 0;
         let max_sc = const {
-            let max = Modulus::<M>::MAGIC_A << 32;
-            let sc = max.div_euclid(M as i64);
-            (sc as u64).trailing_zeros()
+            Modulus::<M>::MIM_PRODUCT
+                .unsigned_abs()
+                .div_euclid(M as u64 * M as u64)
+                .checked_ilog2()
+                .unwrap()
         };
         while w < seq.len() {
             // r = \bar{1}
@@ -511,7 +527,7 @@ where
 
     /// Gets `i`-th coefficient.
     ///
-    /// Consider to use [`eval`], [`sum`] and [`prod`] if possible for performance.
+    /// Consider to use [`eval`], [`sum`] or [`prod`] if possible for performance.
     ///
     /// [`eval`]: Self::eval
     /// [`sum`]: Self::sum
@@ -533,31 +549,63 @@ where
     }
 
     pub fn eval(&self, x: i32) -> i32 {
-        let x = Modulus::<M>::i2p(x as i64);
-        let result = self
-            .seq
-            .iter()
-            .rev()
-            // |v| < (MAGIC_A - 1) * M => |result| < INTERVAL * M
-            .fold(0, |acc, v| Modulus::<M>::imul(acc, x) + v);
-        Modulus::<M>::p2i(result) as i32
+        let max_sc_imul = const {
+            Modulus::<M>::MIM_PRODUCT
+                .unsigned_abs()
+                .div_euclid(M as u64 * M as u64)
+        };
+
+        if (self.scaling_factor as u64) < max_sc_imul {
+            let x = Modulus::<M>::i2p(x as i64);
+            let result = self.seq[..=self.degree]
+                .iter()
+                .rev()
+                .fold(0, |acc, v| Modulus::<M>::imul(acc, x) + v);
+            Modulus::<M>::p2i(result) as i32
+        } else {
+            let result = self.seq[..=self.degree].iter().rev().fold(0, |acc, v| {
+                // M < 2^31
+                (acc * x as i64 + Modulus::<M>::p2i(*v)) % M as i64
+            });
+            result as i32
+        }
     }
 
     pub fn sum(&self) -> i32 {
-        // seq.len() < M => |sum| < INTERVAL * M^2
-        let sum: i64 = self.seq.iter().sum();
-        Modulus::<M>::p2i(sum) as i32
+        let max_sc_p2i = const { Modulus::<M>::MIM_PRODUCT.unsigned_abs() / M as u64 };
+        let chunk_size = {
+            let max = max_sc_p2i / self.scaling_factor as u64;
+            max.min(usize::MAX as u64) as usize
+        };
+
+        // |sum| < M 2^L < M^2
+        let sum = self.seq[..=self.degree]
+            .chunks(chunk_size)
+            .fold(0, |sum, chunk| sum + Modulus::<M>::p2i(chunk.iter().sum()));
+        (sum % M as i64) as i32
     }
 
     pub fn prod(&self) -> i32 {
-        let prod = self
-            .seq
-            .iter()
-            .fold(const { Modulus::<M>::i2p(1) }, |acc, v| {
+        let max_sc_imul = const {
+            Modulus::<M>::MIM_PRODUCT
+                .unsigned_abs()
+                .div_euclid(M as u64 * M as u64)
+        };
+
+        if self.scaling_factor as u64 <= max_sc_imul {
+            let prod = self.seq[..=self.degree]
+                .iter()
+                .fold(const { Modulus::<M>::i2p(1) }, |acc, v| {
+                    Modulus::<M>::imul(acc, *v)
+                });
+            Modulus::<M>::p2i(prod) as i32
+        } else {
+            let prod = self.seq[..=self.degree].iter().fold(1, |acc, v| {
                 // |v| < INTERVAL * M
-                Modulus::<M>::imul(acc, *v)
+                acc * Modulus::<M>::p2i(*v) % M as i64
             });
-        Modulus::<M>::p2i(prod) as i32
+            prod as i32
+        }
     }
 }
 
@@ -573,11 +621,15 @@ where
             std::mem::swap(&mut self, &mut rhs);
         }
 
-        // reduce if necessary
+        self.degree = self.degree.max(rhs.degree);
+
         if let Some(sum) = self.scaling_factor.checked_add(rhs.scaling_factor) {
-            self.scaling_factor = sum;
+            // no reduction
             Iterator::zip(self.seq.iter_mut(), rhs.seq).for_each(|(l, r)| *l += r);
-        } else if Modulus::<M>::L >= 2 {
+            self.scaling_factor = sum;
+        } else if M >> 29 == 0
+        /* i.e. α >= 2 */
+        {
             // add then reduce
             Iterator::zip(self.seq.iter_mut(), rhs.seq)
                 .for_each(|(l, r)| *l = Modulus::<M>::p2i2p(*l + r));
@@ -616,5 +668,24 @@ where
     fn neg(mut self) -> Self::Output {
         self.seq.iter_mut().for_each(|v| *v = -*v);
         self
+    }
+}
+
+impl<const M: u32> From<Vec<i32>> for Polynomial<M>
+where
+    Modulus<M>: NTTFriendlyPrime,
+{
+    fn from(value: Vec<i32>) -> Self {
+        let seq: Vec<_> = value
+            .into_iter()
+            .map(|i| Modulus::<M>::i2p(i as i64))
+            .collect();
+        let degree = seq.len().checked_sub(1).unwrap_or(0);
+
+        Self {
+            seq,
+            scaling_factor: 1,
+            degree,
+        }
     }
 }
