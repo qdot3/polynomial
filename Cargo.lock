@@ -76,6 +76,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
+name = "from_bytes"
+version = "0.1.0"
+source = "git+https://github.com/qdot3/lib-cp#a8244f6c273b8457ce173242d8dd074d5e411c9f"
+
+[[package]]
 name = "getrandom"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -140,6 +145,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "input"
+version = "0.1.0"
+source = "git+https://github.com/qdot3/lib-cp#a8244f6c273b8457ce173242d8dd074d5e411c9f"
+dependencies = [
+ "from_bytes",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -194,6 +207,8 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 name = "polynomial"
 version = "0.0.0"
 dependencies = [
+ "from_bytes",
+ "input",
  "proptest",
 ]
 

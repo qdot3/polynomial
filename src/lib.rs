@@ -265,8 +265,8 @@ where
         };
 
         let mut w = seq.len() >> 1;
-        let mut sc = 0;
-        let max_sc = const {
+        let mut step = 0;
+        let redc_interval = const {
             Modulus::<M>::MIM_PRODUCT
                 .unsigned_abs()
                 .div_euclid(M as u64 * M as u64)
@@ -276,8 +276,7 @@ where
         while w > 0 {
             // r = \bar{1}
             {
-                let (pre, suf) = seq.split_at_mut(w);
-                let (suf, _) = suf.split_at_mut(w);
+                let (pre, suf) = seq[..w * 2].split_at_mut(w);
 
                 pre.iter_mut().zip(suf.iter_mut()).for_each(|(p, s)| {
                     let x = *s;
@@ -301,14 +300,14 @@ where
 
             w >>= 1;
 
-            sc += 1;
-            if sc == max_sc {
-                sc = 1;
+            step += 1;
+            if step == redc_interval {
+                step = 0;
                 seq.iter_mut().for_each(|v| *v = Modulus::<M>::reduce(*v));
             }
         }
 
-        sc == 1
+        step == 0
     }
 
     /// Performs an in-place inverse Cooley–Tukey butterfly without normalization.
@@ -372,8 +371,8 @@ where
         };
 
         let mut w = 1;
-        let mut sc = 0;
-        let max_sc = const {
+        let mut step = 0;
+        let redc_interval = const {
             Modulus::<M>::MIM_PRODUCT
                 .unsigned_abs()
                 .div_euclid(M as u64 * M as u64)
@@ -383,8 +382,7 @@ where
         while w < seq.len() {
             // r = \bar{1}
             {
-                let (pre, suf) = seq.split_at_mut(w);
-                let (suf, _) = suf.split_at_mut(w);
+                let (pre, suf) = seq[..2 * w].split_at_mut(w);
 
                 pre.iter_mut().zip(suf.iter_mut()).for_each(|(p, s)| {
                     let x = *s;
@@ -408,14 +406,14 @@ where
 
             w <<= 1;
 
-            sc += 1;
-            if sc == max_sc {
-                sc = 1;
+            step += 1;
+            if step == redc_interval {
+                step = 0;
                 seq.iter_mut().for_each(|v| *v = Modulus::<M>::reduce(*v));
             }
         }
 
-        sc == 1
+        step == 0
     }
 
     /// Performs an in-place convolution using Cooley–Tukey butterflies,
@@ -513,8 +511,16 @@ impl<const M: u32> Polynomial<M>
 where
     Modulus<M>: NTTFriendlyPrime,
 {
-    pub fn new(n: usize) -> Self {
+    pub fn new() -> Self {
         todo!()
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            seq: Vec::with_capacity(capacity),
+            scaling_factor: 1,
+            degree: 0,
+        }
     }
 
     pub fn ones(n: usize) -> Self {
@@ -532,7 +538,7 @@ where
     /// [`eval`]: Self::eval
     /// [`sum`]: Self::sum
     /// [`prod`]: Self::prod
-    pub fn get(self, i: usize) -> Option<i32> {
+    pub fn get(&self, i: usize) -> Option<i32> {
         match self.seq.get(i) {
             Some(v) => Some(Modulus::<M>::p2i(*v) as i32),
             None => None,
@@ -542,6 +548,8 @@ where
     pub fn set(&mut self, i: usize, v: i32) -> bool {
         if let Some(u) = self.seq.get_mut(i) {
             *u = Modulus::<M>::i2p(v as i64);
+            self.degree = self.degree.max(i);
+
             true
         } else {
             false
@@ -659,6 +667,32 @@ where
     }
 }
 
+impl<const M: u32> Mul for Polynomial<M>
+where
+    Modulus<M>: NTTFriendlyPrime,
+{
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        let d = self.degree + rhs.degree;
+        let n = (d + 1).next_power_of_two();
+
+        let mut lhs = self.seq;
+        lhs.resize(n, 0);
+
+        let mut rhs = rhs.seq;
+        rhs.resize(n, 0);
+
+        Self::wrapping_mul_assign(&mut lhs, &mut rhs);
+
+        Self {
+            seq: lhs,
+            scaling_factor: 1,
+            degree: d,
+        }
+    }
+}
+
 impl<const M: u32> Neg for Polynomial<M>
 where
     Modulus<M>: NTTFriendlyPrime,
@@ -687,5 +721,16 @@ where
             scaling_factor: 1,
             degree,
         }
+    }
+}
+
+impl<const M: u32> Extend<i32> for Polynomial<M>
+where
+    Modulus<M>: NTTFriendlyPrime,
+{
+    fn extend<T: IntoIterator<Item = i32>>(&mut self, iter: T) {
+        self.seq
+            .extend(iter.into_iter().map(|i| Modulus::<M>::i2p(i as i64)));
+        self.degree = self.seq.len().saturating_sub(1)
     }
 }
