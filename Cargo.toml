@@ -8,4 +8,5 @@ edition = "2021"
 [dev-dependencies]
 proptest = "1.11.0"
 from_bytes = { git = "https://github.com/qdot3/lib-cp" }
-input = { git = "https://github.com/qdot3/lib-cp" }
+reader = { git = "https://github.com/qdot3/lib-cp" }
+output = { git = "https://github.com/qdot3/lib-cp" }

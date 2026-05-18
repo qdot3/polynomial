@@ -39,6 +39,7 @@ where
 
         let mut i = 0;
         while i < lut.len() {
+            // 0 -> 0
             lut[i] = Modulus::<M>::pow(lut[i], M.checked_sub(2).unwrap());
             i += 1;
         }

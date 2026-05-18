@@ -78,7 +78,7 @@ checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 [[package]]
 name = "from_bytes"
 version = "0.1.0"
-source = "git+https://github.com/qdot3/lib-cp#a8244f6c273b8457ce173242d8dd074d5e411c9f"
+source = "git+https://github.com/qdot3/lib-cp#920c7ab32cc21b5b5bf3beda9ec225eb29365b7d"
 
 [[package]]
 name = "getrandom"
@@ -116,9 +116,9 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.17.0"
+version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
+checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "heck"
@@ -139,17 +139,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
- "hashbrown 0.17.0",
+ "hashbrown 0.17.1",
  "serde",
  "serde_core",
-]
-
-[[package]]
-name = "input"
-version = "0.1.0"
-source = "git+https://github.com/qdot3/lib-cp#a8244f6c273b8457ce173242d8dd074d5e411c9f"
-dependencies = [
- "from_bytes",
 ]
 
 [[package]]
@@ -204,12 +196,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "output"
+version = "0.1.0"
+source = "git+https://github.com/qdot3/lib-cp#920c7ab32cc21b5b5bf3beda9ec225eb29365b7d"
+
+[[package]]
 name = "polynomial"
 version = "0.0.0"
 dependencies = [
  "from_bytes",
- "input",
+ "output",
  "proptest",
+ "reader",
 ]
 
 [[package]]
@@ -322,6 +320,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
 dependencies = [
  "rand_core",
+]
+
+[[package]]
+name = "reader"
+version = "0.1.0"
+source = "git+https://github.com/qdot3/lib-cp#920c7ab32cc21b5b5bf3beda9ec225eb29365b7d"
+dependencies = [
+ "from_bytes",
 ]
 
 [[package]]
