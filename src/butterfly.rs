@@ -1,12 +1,19 @@
-use crate::{Modulus, NTTFriendlyPrime, Polynomial};
+use crate::{Modulus, NTTFriendlyPrime};
 
-/// Low-level apis for multiplication of polynomials (convolution).
-impl<const M: u32> Polynomial<M>
+pub struct Butterfly<const M: u32>
+where
+    Modulus<M>: NTTFriendlyPrime;
+
+impl<const M: u32> Butterfly<M>
 where
     Modulus<M>: NTTFriendlyPrime,
 {
+    const _CHECK: () = {
+        assert!(M >> 31 == 0, "Modulus `M` must be less than 2^31");
+    };
+
     /// w <- w * LUT[i.trailing_ones()]
-    const LUT: [i64; 32] = {
+    const LUT: [u32; 30] = {
         let mut lut = [0; _];
 
         let mut r = Modulus::<M>::pow(
@@ -16,25 +23,25 @@ where
         let mut ir = Modulus::<M>::pow(r, M.checked_sub(2).unwrap());
 
         let mut i = 2;
-        let l = Modulus::<M>::L as usize;
+        let l = Modulus::<M>::D as usize;
         while i <= l {
             lut[l - i] = r;
 
             let mut j = l - i;
             while j + 2 < l {
                 j += 1;
-                lut[j] = Modulus::<M>::imul(lut[j], ir);
+                lut[j] = Modulus::<M>::mul(lut[j] as u64, ir as u64);
             }
 
-            r = Modulus::<M>::imul(r, r);
-            ir = Modulus::<M>::imul(ir, ir);
+            r = Modulus::<M>::mul(r as u64, r as u64);
+            ir = Modulus::<M>::mul(ir as u64, ir as u64);
             i += 1;
         }
 
         lut
     };
 
-    const LUT_INV: [i64; 32] = {
+    const LUT_INV: [u32; 30] = {
         let mut lut = Self::LUT;
 
         let mut i = 0;
@@ -47,197 +54,161 @@ where
         lut
     };
 
-    const SKIP_REDC_INTERVAL: u32 = {
-        Modulus::<M>::MIM_PRODUCT
-            .unsigned_abs()
-            .div_euclid(M as u64 * M as u64)
-            .checked_ilog2()
-            .unwrap()
-    };
-
-    /// Performs an in-place Cooley–Tukey butterfly without normalization.
+    /// Performs in-place radix-2 Cooley–Tukey NTT.
     ///
-    /// This function may leave `seq` in a non-reduced state.
+    /// The input is in natural order, and the output is in bit-reversed order.
     ///
-    /// Returns `true` if the resulting `seq` happens to be fully [`reduced`].
-    ///
-    /// [`reduced`]: Modulus::reduce
+    /// If `REDUCE` is `true`, all output coefficients are reduced modulo `M`.
     ///
     /// # Preconditions
     ///
-    /// - values in `seq` must be in Plantard form.
-    /// - `seq` must be reduced.
-    /// - `seq.len()` must be a power of two.
-    /// - `seq.len() <= (1 << L)`, where `L = (M - 1).trailing_zeros()`.
-    ///
-    /// # Time complexity
-    ///
-    /// Θ(N log N), where N = `seq.len()`.
-    pub fn butterfly(seq: &mut [i64]) -> bool {
+    /// - `seq.len().is_power_of_two()`
+    /// - `seq.len() <= 1 << Modulus::<M>::D`
+    /// - `seq[i] < M` for all `i`
+    pub fn op<const REDUCE: bool>(seq: &mut [u32]) {
+        assert!(seq.len().is_power_of_two());
         assert!(
-            seq.len().is_power_of_two(),
-            "`seq.len()` must be a power of two."
+            (seq.len() - 1) >> Modulus::<M>::D == 0,
+            "`seq.len()` is too large"
         );
-        assert!(
-            seq.len() >> Modulus::<M>::L <= 1,
-            "Modulus `M` does not support NTT for this sequence length (too large)."
-        );
-        debug_assert!(
-            seq.iter().all(|v| v.unsigned_abs() < M as u64),
-            "`seq` must be reduced."
-        );
+        debug_assert!(seq.iter().all(|v| *v < M));
 
-        let mut w = seq.len() >> 1;
-        let mut step = 0;
-        while w > 0 {
-            // r = \bar{1}
-            {
-                let (pre, suf) = seq[..w * 2].split_at_mut(w);
+        // maximum number of butterfly stages that can be accumulated
+        // before a modular reduction is required.
+        let max_scaling_factor = const {
+            // (M-1) + n M < 2^32
+            let n = (M.wrapping_neg() + 1) / M;
+            // n >= 2 <=> M < (2^32 + 1)/3
+            assert!(n > 1);
+            n
+        };
 
+        let mut w = seq.len();
+        let mut scaling_factor = 1;
+        while w >= 2 {
+            let mut r = const { Modulus::<M>::i2p(1) };
+            for (i, pair) in seq.chunks_exact_mut(w).enumerate() {
+                let (pre, suf) = pair.split_at_mut(w / 2);
+
+                // every stage contributes at most one additional `M` to each coefficient.
                 pre.iter_mut().zip(suf.iter_mut()).for_each(|(p, s)| {
-                    let x = *s;
-                    *s = *p - x;
-                    *p = *p + x;
-                });
-            }
+                    let x = Modulus::<M>::mul(*s as u32 as u64, r as u64);
+                    debug_assert!(x < M);
 
-            let mut r = Self::LUT[0];
-            for (i, pair) in seq.chunks_exact_mut(w << 1).enumerate().skip(1) {
-                let (pre, suf) = pair.split_at_mut(w);
-
-                pre.iter_mut().zip(suf.iter_mut()).for_each(|(p, s)| {
-                    let x = Modulus::<M>::imul(*s, r);
-                    *s = *p - x;
+                    *s = *p + (M - x);
                     *p = *p + x;
                 });
 
-                r = Modulus::<M>::imul(r, Self::LUT[i.trailing_ones() as usize])
+                // advance to the next twiddle factor.
+                r = Modulus::<M>::mul(
+                    r as u64,
+                    Self::LUT[i.trailing_ones() as usize % Self::LUT.len()] as u64,
+                )
             }
-
             w >>= 1;
+            scaling_factor += 1;
 
-            step += 1;
-            if step == Self::SKIP_REDC_INTERVAL {
-                step = 0;
-                seq.iter_mut().for_each(|v| *v = Modulus::<M>::reduce(*v));
+            // reduce coefficients before the next doubling would overflow.
+            if scaling_factor == max_scaling_factor {
+                scaling_factor = 1;
+                seq.iter_mut().for_each(|v| *v %= M);
             }
         }
 
-        step == 0
+        let reduced = scaling_factor == 1;
+        if REDUCE && !reduced {
+            seq.iter_mut().for_each(|v| *v %= M);
+        }
     }
 
-    /// Performs an in-place inverse Cooley–Tukey butterfly without normalization.
+    /// Performs in-place radix-2 Cooley–Tukey INTT.
     ///
-    /// This function may leave `seq` in a non-reduced state.
+    /// The input is in bit-reversed order, and the output is in natural order.
     ///
-    /// Returns `true` if the resulting `seq` happens to be fully reduced.
-    ///
-    /// This is the inverse operation of [`butterfly`].
+    /// If `REDUCE` is `true`, all output coefficients are reduced modulo `M`.
     ///
     /// # Preconditions
     ///
-    /// - values in `seq` must be in Plantard form.
-    /// - `seq` must be reduced.
-    /// - `seq.len()` must be a power of two.
-    /// - `seq.len() <= (1 << L)`, where `L = (M - 1).trailing_zeros()`.
-    ///
-    /// # Time complexity
-    ///
-    /// Θ(N log N), where N = `seq.len()`.
-    pub fn butterfly_inv(seq: &mut [i64]) -> bool {
+    /// - `seq.len().is_power_of_two()`
+    /// - `seq.len() <= 1 << Modulus::<M>::D`
+    /// - `seq[i] < M` for all `i`
+    pub fn inv<const REDUCE: bool>(seq: &mut [u32]) {
+        assert!(seq.len().is_power_of_two());
         assert!(
-            seq.len().is_power_of_two(),
-            "`seq.len()` must be a power of two."
+            (seq.len() - 1) >> Modulus::<M>::D == 0,
+            "`seq.len()` is too large"
         );
-        assert!(
-            seq.len() >> Modulus::<M>::L <= 1,
-            "Modulus `M` does not support NTT for this sequence length (too large)."
-        );
-        debug_assert!(
-            seq.iter().all(|v| v.unsigned_abs() < M as u64),
-            "`seq` must be reduced."
-        );
+        debug_assert!(seq.iter().all(|v| *v < M));
 
-        let mut w = 1;
-        let mut step = 0;
-        while w < seq.len() {
-            // r = \bar{1}
-            {
-                let (pre, suf) = seq[..2 * w].split_at_mut(w);
+        // upper bound on each coefficient to avoid overflow
+        let upper_bound = const {
+            assert!(M.leading_zeros() >= 1);
+            M << M.leading_zeros()
+        };
 
+        let mut w = 2;
+        let mut offset = M;
+        while w <= seq.len() {
+            let mut r = const { Modulus::<M>::i2p(1) };
+            for (i, pair) in seq.chunks_exact_mut(w).enumerate() {
+                let (pre, suf) = pair.split_at_mut(w / 2);
+
+                // each stage can at most double a coefficient.
                 pre.iter_mut().zip(suf.iter_mut()).for_each(|(p, s)| {
                     let x = *s;
-                    *s = *p - x;
-                    *p = *p + x;
-                });
-            }
-
-            let mut r = Self::LUT_INV[0];
-            for (i, pair) in seq.chunks_exact_mut(w << 1).enumerate().skip(1) {
-                let (pre, suf) = pair.split_at_mut(w);
-
-                pre.iter_mut().zip(suf.iter_mut()).for_each(|(p, s)| {
-                    let x = *s;
-                    *s = Modulus::<M>::imul(*p - x, r);
+                    *s = Modulus::<M>::mul((*p + offset - x) as u64, r as u64);
                     *p = *p + x;
                 });
 
-                r = Modulus::<M>::imul(r, Self::LUT_INV[i.trailing_ones() as usize])
+                // advance to the next twiddle factor.
+                r = Modulus::<M>::mul(
+                    r as u64,
+                    Self::LUT_INV[i.trailing_ones() as usize % Self::LUT_INV.len()] as u64,
+                )
             }
-
             w <<= 1;
+            // `offset` now equals the current coefficient bound.
+            offset <<= 1;
 
-            step += 1;
-            if step == Self::SKIP_REDC_INTERVAL {
-                step = 0;
-                seq.iter_mut().for_each(|v| *v = Modulus::<M>::reduce(*v));
+            // reduce coefficients before the next doubling would overflow.
+            if offset == upper_bound {
+                offset = M;
+                seq.iter_mut().for_each(|v| *v %= M);
             }
         }
 
-        step == 0
+        let reduced = offset == M;
+        if REDUCE && !reduced {
+            seq.iter_mut().for_each(|v| *v %= M);
+        }
     }
 
-    /// Performs an in-place convolution using Cooley–Tukey butterflies,
-    /// storing the result in `lhs`.
+    /// Performs an in-place circular convolution.
     ///
-    /// The result in `lhs` is normalized and reduced.
-    /// This function applies [`butterfly`] to `rhs`, leaving it modified.
+    /// On return:
+    ///
+    /// - `lhs` contains the convolution result modulo `M`.
+    /// - `rhs` contains the result of [`Butterfly::op::<true>()`](Self::op).
     ///
     /// # Preconditions
     ///
-    /// - `lhs` and `rhs` must be in Plantard form.
-    /// - `lhs` and `rhs` must be reduced.
-    /// - `lhs.len() == rhs.len()`.
-    /// - `lhs.len()` must be a power of two.
-    ///
-    /// # Time complexity
-    ///
-    /// Θ(N log N), where N = `lhs.len()`.
-    pub fn wrapping_mul_assign(lhs: &mut [i64], rhs: &mut [i64]) {
-        assert_eq!(lhs.len(), rhs.len(), "lengths of operands must match");
-        assert!(
-            lhs.len().is_power_of_two(),
-            "length of operands must be a power of two"
-        );
-        debug_assert!(
-            lhs.iter().all(|v| v.unsigned_abs() < M as u64),
-            "`lhs` must be reduced."
-        );
-        debug_assert!(
-            rhs.iter().all(|v| v.unsigned_abs() < M as u64),
-            "`rhs` must be reduced."
-        );
+    /// - `lhs.len() == rhs.len()`
+    /// - `lhs` and `rhs` satisfy the preconditions of [`Butterfly::op`]
+    pub fn circular_convolution(lhs: &mut [u32], rhs: &mut [u32]) {
+        assert_eq!(lhs.len(), rhs.len());
 
         let frac_1_n = {
-            // `1 / 2^i (mod M)`
+            // LUT of 2^{-i} (mod M) in Plantard representation.
             let lut = const {
                 let mut lut = [0; 32];
-                lut[0] = Modulus::<M>::i2p(1);
-                lut[1] = Modulus::<M>::i2p((M + 1).div_ceil(2) as i64);
 
-                let mut i = 2;
-                while i < 32 {
-                    lut[i] = Modulus::<M>::imul(lut[i - 1], lut[1]);
+                let mut i = 0;
+                let mut pow2 = Modulus::<M>::i2p(1);
+                let two = Modulus::<M>::i2p(2) as u64;
+                while i < lut.len() {
+                    lut[i as usize] = Modulus::<M>::pow(pow2, M.checked_sub(2).unwrap());
+
+                    pow2 = Modulus::<M>::mul(pow2 as u64, two);
                     i += 1;
                 }
 
@@ -248,39 +219,69 @@ where
             lut[exp as usize]
         };
 
-        Self::butterfly(lhs);
-        Self::butterfly(rhs);
-        lhs.iter_mut().zip(rhs.iter_mut()).for_each(|(l, r)| {
-            // Since scaling factors of `lhs` and `rhs` are the same,
-            // at least one multiplication is available without reduction.
-            *l = Modulus::<M>::imul(*l, *r);
+        Self::op::<false>(lhs);
+        Self::op::<true>(rhs);
+
+        lhs.iter_mut().zip(rhs.iter()).for_each(|(l, r)| {
+            // Since `r < M < 2^31`, precondition is always satisfied
+            *l = Modulus::<M>::mul(*l as u64, *r as u64);
         });
-        Self::butterfly_inv(lhs);
-        // normalize and reduce the result
-        lhs.iter_mut()
-            .for_each(|v| *v = Modulus::<M>::imul(*v, frac_1_n));
+
+        Self::inv::<false>(lhs);
+        lhs.iter_mut().for_each(|l| {
+            // Since `frac_1_n < M < 2^31`, precondition is always satisfied
+            *l = Modulus::<M>::mul(*l as u64, frac_1_n as u64);
+        });
     }
 }
 
-#[test]
-fn butterfly() {
-    for n in (0..23).map(|d| 1 << d) {
-        const MOD: u32 = 998_244_353;
+#[cfg(test)]
+mod butterfly {
+    use proptest::prelude::*;
 
-        let mut seq = Vec::from_iter((0..n as i64).map(|v| v % MOD as i64));
-        seq.extend_from_slice(&vec![0; n]);
-        let test: Vec<_> = seq
-            .iter()
-            .map(|v| (v * n as i64 * 2).rem_euclid(MOD as i64))
-            .collect();
+    use super::{Butterfly, Modulus};
 
-        type P = Polynomial<MOD>;
-        if !P::butterfly(&mut seq) {
-            // seq.iter_mut().for_each(|v| *v = Modulus::<MOD>::reduce(*v));
+    const N: usize = 1 << 8;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1 << 10))]
+        #[test]
+        fn butterfly(src in proptest::collection::vec(0..998_244_353_u32, N)) {
+            let mut tar = src.clone();
+            Butterfly::<998_244_353>::op::<true>(&mut tar);
+            Butterfly::<998_244_353>::inv::<true>(&mut tar);
+
+            assert!((0..N).all(|i| (src[i] as u64 * N as u64 % 998_244_353) as u32 == tar[i]));
         }
-        P::butterfly_inv(&mut seq);
-        seq.iter_mut().for_each(|v| *v = v.rem_euclid(MOD as i64));
+    }
 
-        assert_eq!(seq, test)
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1 << 10))]
+        #[test]
+        fn convolution(
+            mut lhs in proptest::collection::vec(0..998_244_353_u32, N),
+            mut rhs in proptest::collection::vec(0..998_244_353_u32, N),
+        ) {
+            lhs[N / 2..].fill(0);
+            rhs[N / 2..].fill(0);
+
+            type M = Modulus::<998_244_353>;
+
+            lhs.iter_mut().for_each(|v| *v = M::i2p(*v as u32) );
+            rhs.iter_mut().for_each(|v| *v = M::i2p(*v as u32) );
+
+            let mut naive = vec![0; N];
+            for i in 0..N / 2 {
+                for j in 0.. N / 2 {
+                    naive[i + j] = (
+                        naive[i + j] + M::mul(lhs[i] as u64, rhs[j] as u64)
+                    ) % 998_244_353;
+                }
+            }
+
+            Butterfly::<998_244_353>::circular_convolution(&mut lhs, &mut rhs);
+
+            assert!((0..N).all(|i| lhs[i] == naive[i]));
+        }
     }
 }
