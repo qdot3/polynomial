@@ -6,7 +6,7 @@ impl<const M: u32> Modulus<M> {
         assert!(M >> 31 == 0, "Modulus `M` must be less than 2^31");
     };
 
-    const INV_MODULUS: u64 = {
+    pub const INV_MODULUS: u64 = {
         let m = M as u64;
         // 1 * 1 = 3 * 3 = 1 (mod 4)
         let mut inv_m = m & 3;
@@ -27,16 +27,21 @@ impl<const M: u32> Modulus<M> {
     ///
     /// # Preconditions
     ///
-    /// `a * b + M * 2^32 < 2^64` OR `a < 2^32 && b < M`
+    /// `a * b + M * 2^32 < 2^64` OR `a < M` OR `b < M`
     #[inline(always)]
-    pub const fn mul(a: u64, b: u64) -> u32 {
+    pub const fn mul(a: u32, b: u32) -> u32 {
         // FIXME: const hack
         debug_assert!(
-            a.checked_mul(b).is_some() && (a * b).checked_add((M as u64) << 32).is_some(),
+            (a as u64 * b as u64)
+                .checked_add((M as u64) << 32)
+                .is_some(),
             "`a * b + M * 2^32` must fit in `u64`"
         );
 
-        let x = a.wrapping_mul(b).wrapping_mul(Self::INV_MODULUS) >> 32;
+        let x = (a as u64)
+            .wrapping_mul(b as u64)
+            .wrapping_mul(Self::INV_MODULUS)
+            >> 32;
         let x = (x + 1) as u32 as u64 * M as u64;
         (x >> 32) as u32
     }
@@ -52,9 +57,10 @@ impl<const M: u32> Modulus<M> {
         let mut result = const { Self::i2p(1) };
         while exp > 0 {
             if exp & 1 == 1 {
-                result = Self::mul(result as u64, p as u64);
+                result = Self::mul(result, p);
             }
-            p = Self::mul(p as u64, p as u64);
+            // `p < M`
+            p = Self::mul(p, p);
             exp >>= 1;
         }
 
@@ -66,23 +72,14 @@ impl<const M: u32> Modulus<M> {
         // `2^128 (mod M)`
         let pow_2_128 = const {
             let pow_2_64 = (M as u64).wrapping_neg() % M as u64;
-            (pow_2_64 * pow_2_64) % M as u64
+            ((pow_2_64 * pow_2_64) % M as u64) as u32
         };
 
-        Self::mul(i as u64, pow_2_128 as u32 as u64)
+        Self::mul(i, pow_2_128)
     }
 
     /// Converts a value from Plantard representation back to a standard integer.
-    ///
-    /// # Preconditions
-    ///
-    /// `p + M * 2^32 < 2^64`
-    pub const fn p2i(p: u64) -> u32 {
-        debug_assert!(
-            p.checked_add((M as u64) << 32).is_some(),
-            "`p + M * 2^32` must fit in `u64`"
-        );
-
+    pub const fn p2i(p: u32) -> u32 {
         Self::mul(p, 1)
     }
 }
@@ -101,7 +98,7 @@ mod plantard_mul {
         #[test]
         fn conversion(i: u32) {
             let p = M::i2p(i);
-            assert_eq!(M::p2i(p as u64), i % P)
+            assert_eq!(M::p2i(p), i % P)
         }
     }
 
@@ -113,7 +110,7 @@ mod plantard_mul {
             let mut pow = M::i2p(1);
             for exp in 0..1 << 5 {
                 assert_eq!(M::pow(p, exp), pow);
-                pow = M::mul(pow as u64, p as u64);
+                pow = M::mul(pow, p);
             }
         }
     }

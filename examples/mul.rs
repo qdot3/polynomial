@@ -38,13 +38,13 @@ fn main() {
 
     if is_x86_feature_detected!("avx2") {
         // SAFETY: guaranteed above
-        unsafe { solve_avx2(&mut a, &mut b) };
+        unsafe { Butterfly::circular_convolution_avx2(&mut a, &mut b) };
     } else {
-        solve(&mut a, &mut b)
+        Butterfly::circular_convolution(&mut a, &mut b);
     }
 
     for i in 0..n + m - 1 {
-        let v = M::p2i(a[i] as u64);
+        let v = M::p2i(a[i]);
 
         let _ = output.write(buf.format(v).as_bytes());
         if i + 1 < n + m - 1 {
@@ -52,14 +52,4 @@ fn main() {
         }
     }
     output.write(b"\n").unwrap();
-}
-
-fn solve(a: &mut [u32], b: &mut [u32]) {
-    Butterfly::circular_convolution(a, b);
-}
-
-/// 自動ベクトル化を期待
-#[target_feature(enable = "avx2")]
-fn solve_avx2(a: &mut [u32], b: &mut [u32]) {
-    Butterfly::circular_convolution(a, b);
 }
