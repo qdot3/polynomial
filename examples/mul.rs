@@ -1,5 +1,8 @@
 /// Verified at <https://judge.yosupo.jp/problem/convolution_mod>
-use std::io::{stdin, stdout, BufWriter, Write};
+use std::{
+    io::{stdin, stdout, BufWriter, Write},
+    mem::take,
+};
 
 use output::IntBuffer;
 use polynomial::{Butterfly, Modulus};
@@ -43,13 +46,12 @@ fn main() {
         Butterfly::circular_convolution(&mut a, &mut b);
     }
 
-    for i in 0..n + m - 1 {
-        let v = M::p2i(a[i]);
-
-        let _ = output.write(buf.format(v).as_bytes());
-        if i + 1 < n + m - 1 {
-            let _ = output.write(b" ");
-        }
+    a.truncate(n + m - 1);
+    a.iter_mut().for_each(|a| *a = M::p2i(*a));
+    output.write(buf.format(a[0]).as_bytes()).unwrap();
+    for a in a.into_iter().skip(1) {
+        output.write(b" ").unwrap();
+        output.write(buf.format(a).as_bytes()).unwrap();
     }
     output.write(b"\n").unwrap();
 }
