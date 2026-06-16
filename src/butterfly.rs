@@ -71,13 +71,11 @@ where
     #[inline(always)]
     pub fn op(seq: &mut [u32]) {
         assert!(seq.len().is_power_of_two());
-        assert!(
-            (seq.len() - 1) >> Modulus::<M>::D == 0,
-            "`seq.len()` is too large"
-        );
+        let size = seq.len().trailing_zeros();
+        assert!(size <= Modulus::<M>::D);
         debug_assert!(seq.iter().all(|v| *v < M));
 
-        let mut w = seq.len();
+        let mut w = 1_usize << size;
         while w >= 2 {
             let mut r = const { Modulus::<M>::i2p(1) };
             for (i, pair) in seq.chunks_exact_mut(w).enumerate() {
