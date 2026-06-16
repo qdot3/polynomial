@@ -1,8 +1,5 @@
 /// Verified at <https://judge.yosupo.jp/problem/convolution_mod>
-use std::{
-    io::{stdin, stdout, BufWriter, Write},
-    mem::take,
-};
+use std::io::{stdin, stdout, BufWriter, Write};
 
 use output::IntBuffer;
 use polynomial::{Butterfly, Modulus};

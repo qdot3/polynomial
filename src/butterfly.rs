@@ -10,6 +10,14 @@ where
 {
     const _CHECK: () = {
         assert!(M >> 31 == 0, "Modulus `M` must be less than 2^31");
+        assert!(
+            Self::LUT.len() > Modulus::<M>::D as usize,
+            "out-of-bounds error"
+        );
+        assert!(
+            Self::LUT_INV.len() > Modulus::<M>::D as usize,
+            "out-of-bounds error"
+        );
     };
 
     /// w <- w * LUT[i.trailing_ones()]
@@ -95,7 +103,11 @@ where
                 });
 
                 // advance to the next twiddle factor.
-                r = Modulus::<M>::mul(r, Self::LUT[i.trailing_ones() as usize % Self::LUT.len()])
+                r = Modulus::<M>::mul(
+                    r,
+                    // SAFETY: `i.trailing_ones() <= Modulus::D < LUT.len()`
+                    *unsafe { Self::LUT.get_unchecked(i.trailing_ones() as usize) },
+                );
             }
             w >>= 1;
         }
@@ -285,7 +297,8 @@ where
                 // advance to the next twiddle factor.
                 r = Modulus::<M>::mul(
                     r,
-                    Self::LUT_INV[i.trailing_ones() as usize % Self::LUT_INV.len()],
+                    // SAFETY: `i.trailing_ones() <= Modulus::D < LUT_INV.len()`
+                    *unsafe { Self::LUT_INV.get_unchecked(i.trailing_ones() as usize) },
                 )
             }
             w <<= 1;
