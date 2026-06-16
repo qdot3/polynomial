@@ -64,6 +64,10 @@ where
     /// - `seq.len().is_power_of_two()`
     /// - `seq.len() <= 1 << Modulus::<M>::D`
     /// - `seq[i] < M` for all `i`
+    /// 
+    /// # Time complexity
+    /// 
+    /// Θ(N log N)
     #[inline(always)]
     pub fn op(seq: &mut [u32]) {
         assert!(seq.len().is_power_of_two());
@@ -83,12 +87,13 @@ where
                     let x = Modulus::<M>::mul(*s, r);
                     debug_assert!(x < M);
 
-                    // s < M
                     *s = p.wrapping_sub(x);
                     *s = s.wrapping_add(if s.cast_signed().is_negative() { M } else { 0 });
-                    // p < M
+                    debug_assert!(*s < M);
+
                     *p = *p + x;
                     *p = p.wrapping_sub(if *p >= M { M } else { 0 });
+                    debug_assert!(*p < M);
                 });
 
                 // advance to the next twiddle factor.
@@ -114,6 +119,10 @@ where
     /// - `seq.len().is_power_of_two()`
     /// - `seq.len() <= 1 << Modulus::<M>::D`
     /// - `seq[i] < M` for all `i`
+    /// 
+    /// # Time complexity
+    /// 
+    /// Θ(N log N)
     #[inline(always)]
     pub fn inv(seq: &mut [u32]) {
         assert!(seq.len().is_power_of_two());
@@ -131,11 +140,13 @@ where
 
                 pre.iter_mut().zip(suf.iter_mut()).for_each(|(p, s)| {
                     let x = *s;
-                    // s < M
+
                     *s = Modulus::<M>::mul(*p + M - x, r);
-                    // p < M
+                    debug_assert!(*s < M);
+
                     *p = *p + x;
                     *p = p.wrapping_sub(if *p >= M { M } else { 0 });
+                    debug_assert!(*p < M);
                 });
 
                 // advance to the next twiddle factor.
@@ -164,7 +175,11 @@ where
     /// # Preconditions
     ///
     /// - `lhs.len() == rhs.len()`
-    /// - `lhs` and `rhs` satisfy the preconditions of [`Butterfly::op`]
+    /// - `lhs` and `rhs` satisfy the preconditions of [`Butterfly::op`].
+    /// 
+    /// # Time complexity
+    /// 
+    /// Θ(N log N)
     #[inline(always)]
     pub fn circular_convolution(lhs: &mut [u32], rhs: &mut [u32]) {
         assert_eq!(lhs.len(), rhs.len());
@@ -200,6 +215,8 @@ where
         });
 
         Self::inv(lhs);
+
+        // normalization
         lhs.iter_mut().for_each(|l| {
             // Since `l, frac_1_n < M`, precondition is always satisfied
             *l = Modulus::<M>::mul(*l, frac_1_n);
