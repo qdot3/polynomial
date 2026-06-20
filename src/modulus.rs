@@ -27,7 +27,7 @@ impl<const M: u32> Modulus<M> {
     ///
     /// # Preconditions
     ///
-    /// `a * b + M * 2^32 < 2^64` OR `a < M` OR `b < M`
+    /// `a * b + M * 2^32 < 2^64` OR `a < M` OR `b < M` where `M < 2^31`
     #[inline(always)]
     pub const fn mul(a: u32, b: u32) -> u32 {
         // FIXME: const hack
