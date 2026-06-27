@@ -61,7 +61,6 @@ where
     /// Performs in-place radix-2 Cooley–Tukey NTT with reduction.
     ///
     /// The input is in natural order, and the output is in bit-reversed order.
-    /// After completion, all elements satisfy `seq[i] < M`.
     ///
     /// # Preconditions
     ///
@@ -103,7 +102,6 @@ where
     /// Performs in-place radix-2 Cooley–Tukey INTT.
     ///
     /// The input is in bit-reversed order, and the output is in natural order.
-    /// After completion, all elements satisfy `seq[i] < M`.
     ///
     /// # Preconditions
     ///
@@ -150,7 +148,6 @@ where
     ///
     /// # Preconditions
     ///
-    /// - `seq` must be represented in Plantard form
     /// - `lhs.len() == rhs.len()`
     /// - `lhs` and `rhs` satisfy the preconditions of [`Butterfly::op`].
     ///
