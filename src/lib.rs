@@ -7,5 +7,5 @@ pub use plantard::Mint;
 mod butterfly;
 pub use butterfly::Butterfly;
 
-mod prime;
+pub mod prime;
 pub use prime::{NTTFriendlyPrime, Prime};

@@ -8,7 +8,7 @@ impl<const M: u32> Mint<M> {
         assert!(M > 2);
     };
 
-    pub const INV_M: u64 = {
+    const INV_M: u64 = {
         let m = M as u64;
         // 1 * 1 = 3 * 3 = 1 (mod 4)
         let mut inv_m = m & 3;

@@ -9,7 +9,6 @@ where
     Prime<M>: NTTFriendlyPrime,
 {
     const _CHECK: () = {
-        assert!(M >> 31 == 0, "Modulus `M` must be less than 2^31");
         assert!(
             Self::LUT.len() > Prime::<M>::D as usize,
             "out-of-bounds error"
@@ -67,7 +66,7 @@ where
     /// # Preconditions
     ///
     /// - `seq.len().is_power_of_two()`
-    /// - `seq.len() <= 1 << Modulus::<M>::D`
+    /// - `seq.len() <= 1 << Prime::D`
     ///
     /// # Time complexity
     ///
@@ -109,7 +108,7 @@ where
     /// # Preconditions
     ///
     /// - `seq.len().is_power_of_two()`
-    /// - `seq.len() <= 1 << Modulus::<M>::D`
+    /// - `seq.len() <= 1 << Prime::D`
     ///
     /// # Time complexity
     ///
