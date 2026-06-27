@@ -1,61 +1,58 @@
-use crate::{Modulus, NTTFriendlyPrime};
+use crate::{Mint, NTTFriendlyPrime, Prime};
 
 pub struct Butterfly<const M: u32>
 where
-    Modulus<M>: NTTFriendlyPrime;
+    Prime<M>: NTTFriendlyPrime;
 
 impl<const M: u32> Butterfly<M>
 where
-    Modulus<M>: NTTFriendlyPrime,
+    Prime<M>: NTTFriendlyPrime,
 {
     const _CHECK: () = {
         assert!(M >> 31 == 0, "Modulus `M` must be less than 2^31");
         assert!(
-            Self::LUT.len() > Modulus::<M>::D as usize,
+            Self::LUT.len() > Prime::<M>::D as usize,
             "out-of-bounds error"
         );
         assert!(
-            Self::LUT_INV.len() > Modulus::<M>::D as usize,
+            Self::LUT_INV.len() > Prime::<M>::D as usize,
             "out-of-bounds error"
         );
     };
 
     /// w <- w * LUT[i.trailing_ones()]
-    const LUT: [u32; 32] = {
-        let mut lut = [0; _];
+    const LUT: [Mint<M>; 32] = {
+        let mut lut = [Mint::new(1); _];
 
-        let mut r = Modulus::<M>::pow(
-            Modulus::<M>::i2p(Modulus::<M>::PRIMITIVE_ROOT),
-            Modulus::<M>::A,
-        );
-        let mut ir = Modulus::<M>::pow(r, M.checked_sub(2).unwrap());
+        let mut r = Mint::new(Prime::PRIMITIVE_ROOT).pow(Prime::A);
+        let mut ir = r.inv().expect("");
 
         let mut i = 2;
-        let l = Modulus::<M>::D as usize;
+        let l = Prime::D as usize;
         while i <= l {
             lut[l - i] = r;
 
             let mut j = l - i;
             while j + 2 < l {
                 j += 1;
-                lut[j] = Modulus::<M>::mul(lut[j], ir);
+                lut[j] = lut[j].mul(ir);
             }
 
-            r = Modulus::<M>::mul(r, r);
-            ir = Modulus::<M>::mul(ir, ir);
+            r = r.mul(r);
+            ir = ir.mul(ir);
             i += 1;
         }
 
         lut
     };
 
-    const LUT_INV: [u32; 32] = {
+    const LUT_INV: [Mint<M>; 32] = {
         let mut lut = Self::LUT;
 
         let mut i = 0;
         while i < lut.len() {
             // 0 -> 0
-            lut[i] = Modulus::<M>::pow(lut[i], M.checked_sub(2).unwrap());
+            lut[i] = lut[i].inv().unwrap();
             i += 1;
         }
 
@@ -71,40 +68,31 @@ where
     ///
     /// - `seq.len().is_power_of_two()`
     /// - `seq.len() <= 1 << Modulus::<M>::D`
-    /// - `seq[i] < M` for all `i`
     ///
     /// # Time complexity
     ///
     /// Θ(N log N)
     #[inline(always)]
-    pub fn op(seq: &mut [u32]) {
+    pub fn op(seq: &mut [Mint<M>]) {
         assert!(seq.len().is_power_of_two());
         let size = seq.len().trailing_zeros();
-        assert!(size <= Modulus::<M>::D);
-        debug_assert!(seq.iter().all(|v| *v < M));
+        assert!(size <= Prime::D);
 
         let mut w = 1_usize << size;
         while w >= 2 {
-            let mut r = const { Modulus::<M>::i2p(1) };
+            let mut r = Mint::new(1);
             for (i, pair) in seq.chunks_exact_mut(w).enumerate() {
                 let (pre, suf) = pair.split_at_mut(w / 2);
 
                 pre.iter_mut().zip(suf.iter_mut()).for_each(|(p, s)| {
-                    let x = Modulus::<M>::mul(*s, r);
-                    debug_assert!(x < M);
+                    let x = s.mul(r);
 
-                    *s = p.wrapping_sub(x);
-                    *s = s.wrapping_add(if s.cast_signed().is_negative() { M } else { 0 });
-                    debug_assert!(*s < M);
-
-                    *p = p.wrapping_add(x).wrapping_sub(M);
-                    *p = p.wrapping_add(if p.cast_signed().is_negative() { M } else { 0 });
-                    debug_assert!(*p < M);
+                    *s = p.sub(x);
+                    *p = p.add(x);
                 });
 
                 // advance to the next twiddle factor.
-                r = Modulus::<M>::mul(
-                    r,
+                r = r.mul(
                     // SAFETY: `i.trailing_ones() <= Modulus::D < LUT.len()`
                     *unsafe { Self::LUT.get_unchecked(i.trailing_ones() as usize) },
                 );
@@ -122,40 +110,30 @@ where
     ///
     /// - `seq.len().is_power_of_two()`
     /// - `seq.len() <= 1 << Modulus::<M>::D`
-    /// - `seq[i] < M` for all `i`
     ///
     /// # Time complexity
     ///
     /// Θ(N log N)
     #[inline(always)]
-    pub fn inv(seq: &mut [u32]) {
+    pub fn inv(seq: &mut [Mint<M>]) {
         assert!(seq.len().is_power_of_two());
-        assert!(
-            (seq.len() - 1) >> Modulus::<M>::D == 0,
-            "`seq.len()` is too large"
-        );
-        debug_assert!(seq.iter().all(|v| *v < M));
+        assert!((seq.len() - 1) >> Prime::D == 0, "`seq.len()` is too large");
 
         let mut w = 2;
         while w <= seq.len() {
-            let mut r = const { Modulus::<M>::i2p(1) };
+            let mut r = Mint::new(1);
             for (i, pair) in seq.chunks_exact_mut(w).enumerate() {
                 let (pre, suf) = pair.split_at_mut(w / 2);
 
                 pre.iter_mut().zip(suf.iter_mut()).for_each(|(p, s)| {
                     let x = *s;
 
-                    *s = Modulus::<M>::mul(*p + M - x, r);
-                    debug_assert!(*s < M);
-
-                    *p = p.wrapping_add(x).wrapping_sub(M);
-                    *p = p.wrapping_add(if p.cast_signed().is_negative() { M } else { 0 });
-                    debug_assert!(*p < M);
+                    *s = p.sub(x).mul(r);
+                    *p = p.add(x);
                 });
 
                 // advance to the next twiddle factor.
-                r = Modulus::<M>::mul(
-                    r,
+                r = r.mul(
                     // SAFETY: `i.trailing_ones() <= Modulus::D < LUT_INV.len()`
                     *unsafe { Self::LUT_INV.get_unchecked(i.trailing_ones() as usize) },
                 )
@@ -173,6 +151,7 @@ where
     ///
     /// # Preconditions
     ///
+    /// - `seq` must be represented in Plantard form
     /// - `lhs.len() == rhs.len()`
     /// - `lhs` and `rhs` satisfy the preconditions of [`Butterfly::op`].
     ///
@@ -180,21 +159,17 @@ where
     ///
     /// Θ(N log N)
     #[inline(always)]
-    pub fn circular_convolution(lhs: &mut [u32], rhs: &mut [u32]) {
+    pub fn circular_convolution(lhs: &mut [Mint<M>], rhs: &mut [Mint<M>]) {
         assert_eq!(lhs.len(), rhs.len());
 
         let frac_1_n = {
             // LUT of 2^{-i} (mod M) in Plantard representation.
             let lut = const {
-                let mut lut = [0; 32];
+                let mut lut = [Mint::new(0); 32];
 
                 let mut i = 0;
-                let mut pow2 = Modulus::<M>::i2p(1);
-                let two = Modulus::<M>::i2p(2);
                 while i < lut.len() {
-                    lut[i as usize] = Modulus::<M>::pow(pow2, M.checked_sub(2).unwrap());
-
-                    pow2 = Modulus::<M>::mul(pow2, two);
+                    lut[i as usize] = Mint::new(2).pow(i as u32).inv().expect("must not `0`");
                     i += 1;
                 }
 
@@ -207,18 +182,15 @@ where
 
         Self::op(lhs);
         Self::op(rhs);
-        lhs.iter_mut().zip(rhs.iter()).for_each(|(l, r)| {
-            // Since `l, r, frac_1_n < M < 2^31`, precondition is always satisfied
-            *l = Modulus::<M>::mul(*l, *r);
-            // normalization
-            *l = Modulus::<M>::mul(*l, frac_1_n);
-        });
+        lhs.iter_mut()
+            .zip(rhs.iter())
+            .for_each(|(l, r)| *l = l.mul(*r).mul(frac_1_n));
         Self::inv(lhs);
     }
 
     /// A target-feature-gated wrapper of [`Butterfly::circular_convolution`].
     #[target_feature(enable = "avx2")]
-    pub fn circular_convolution_avx2(lhs: &mut [u32], rhs: &mut [u32]) {
+    pub fn circular_convolution_avx2(lhs: &mut [Mint<M>], rhs: &mut [Mint<M>]) {
         Self::circular_convolution(lhs, rhs);
     }
 }
@@ -227,19 +199,23 @@ where
 mod butterfly {
     use proptest::prelude::*;
 
-    use super::{Butterfly, Modulus};
+    use super::{Butterfly, Mint};
 
     const N: usize = 1 << 8;
+
+    const P: u32 = 998_244_353;
+    type M = Mint<P>;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(1 << 12))]
         #[test]
         fn butterfly(src in proptest::collection::vec(0..998_244_353_u32, N)) {
+            let src: Vec<_> = src.into_iter().map(|v| M::new(v)).collect();
             let mut tar = src.clone();
             Butterfly::<998_244_353>::op(&mut tar);
             Butterfly::<998_244_353>::inv(&mut tar);
 
-            assert!((0..N).all(|i| (src[i] as u64 * N as u64 % 998_244_353) as u32 == tar[i]));
+            assert!((0..N).all(|i| src[i].mul(M::new(N as u32)) == tar[i]));
         }
     }
 
@@ -253,17 +229,13 @@ mod butterfly {
             lhs[N / 2..].fill(0);
             rhs[N / 2..].fill(0);
 
-            type M = Modulus::<998_244_353>;
+            let mut lhs: Vec<_> = lhs.into_iter().map(|v| M::new(v)).collect();
+            let mut rhs: Vec<_> = rhs.into_iter().map(|v| M::new(v)).collect();
 
-            lhs.iter_mut().for_each(|v| *v = M::i2p(*v as u32) );
-            rhs.iter_mut().for_each(|v| *v = M::i2p(*v as u32) );
-
-            let mut naive = vec![0; N];
+            let mut naive = vec![M::new(0); N];
             for i in 0..N / 2 {
                 for j in 0.. N / 2 {
-                    naive[i + j] = (
-                        naive[i + j] + M::mul(lhs[i] , rhs[j] )
-                    ) % 998_244_353;
+                    naive[i + j] = lhs[i].mul(rhs[j]).add(naive[i + j])
                 }
             }
 

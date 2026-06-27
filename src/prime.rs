@@ -1,3 +1,27 @@
+pub struct Prime<const M: u32>;
+
+pub trait NTTFriendlyPrime {
+    const PRIMITIVE_ROOT: u32;
+    /// `P = (A << D) + 1`
+    const A: u32;
+    /// `P = (A << D) + 1`
+    const D: u32;
+}
+
+macro_rules! ntt_prime_impl {
+    ( $p:expr, $r:expr) => {
+        impl NTTFriendlyPrime for Prime<$p> {
+            const PRIMITIVE_ROOT: u32 = $r;
+
+            const A: u32 = $p >> Self::D;
+            const D: u32 = ($p - 1_u32).trailing_zeros();
+        }
+    };
+}
+ntt_prime_impl!(998_244_353, 3);
+
+
+
 /// NTT-friendly prime numbers of the form `a * 2^22 + 1`, where `a` is odd.
 pub const PRIME_22: [u32; 52] = [
     104857601, 113246209, 138412033, 155189249, 163577857, 230686721, 415236097, 666894337,
